@@ -205,61 +205,56 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
     fretting_lm = None
     picking_lm = None
 
-    if landmarker is not None:
-        try:
-            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            with _LANDMARKER_LOCK:
-                res = landmarker.detect(mp_img)
-            if res.hand_landmarks:
-                fretting_lm, picking_lm = _select_fretting_hand(res.hand_landmarks, res.handedness, w, h)
-        except Exception as e:
-            print(f"MediaPipe 탐지 예외: {e}")
+    # 1. 넥 지판 우선 탐색 (하단 35% 자막/타브 및 바디 피킹 손 원천 배제)
+    neck_candidates = [
+        (0.40, 0.00, 1.00, 0.65),  # 우측 상단 넥 (Thumb-over / 지판 상단 파지)
+        (0.40, 0.10, 1.00, 0.75),  # 우측 중단 넥
+        (0.00, 0.00, 0.60, 0.65),  # 좌측 상단 넥
+        (0.00, 0.10, 0.60, 0.75),  # 좌측 중단 넥
+        (0.20, 0.05, 0.85, 0.75),  # 중앙 넥
+    ]
 
-        # 1단계: 기타 넥 영역 위 피부색/운지 손 후보 패치 정밀 탐색
+    if landmarker is not None:
+        for rx1, ry1, rx2, ry2 in neck_candidates:
+            sub_x1, sub_y1 = int(w * rx1), int(h * ry1)
+            sub_x2, sub_y2 = int(w * rx2), int(h * ry2)
+            sub_rgb = np.ascontiguousarray(rgb[sub_y1:sub_y2, sub_x1:sub_x2])
+            if sub_rgb.shape[0] < 40 or sub_rgb.shape[1] < 40:
+                continue
+            try:
+                mp_sub = mp.Image(image_format=mp.ImageFormat.SRGB, data=sub_rgb)
+                with _LANDMARKER_LOCK:
+                    res_sub = landmarker.detect(mp_sub)
+                if res_sub.hand_landmarks:
+                    sw = sub_x2 - sub_x1
+                    sh = sub_y2 - sub_y1
+                    lm = res_sub.hand_landmarks[0]
+                    fretting_lm = [
+                        LandmarkPt(
+                            x=(sub_x1 + p.x * sw) / w,
+                            y=(sub_y1 + p.y * sh) / h,
+                            z=p.z,
+                        )
+                        for p in lm
+                    ]
+                    break
+            except Exception:
+                continue
+
+        # 만약 넥 후보 영역에서 미검출 시, 피부색 패치 및 풀 프레임 탐색
         if fretting_lm is None:
             f_lm, p_lm = _find_fretting_hand_on_neck(rgb, landmarker, w, h)
             if f_lm is not None:
                 fretting_lm = f_lm
-                picking_lm = p_lm
-
-        # 2단계: 와이드 샷으로 인해 풀 프레임에서 손이 작아 미검출된 경우 지판 넥 후보 영역 분할 탐색
-        if fretting_lm is None:
-            sub_regions = [
-                (0.40, 0.15, 1.00, 0.75),  # 우측 지판 넥 영역
-                (0.00, 0.15, 0.60, 0.75),  # 좌측 지판 넥 영역
-                (0.20, 0.15, 0.85, 0.75),  # 중앙 지판 넥 영역
-            ]
-            for rx1, ry1, rx2, ry2 in sub_regions:
-                sub_x1, sub_y1 = int(w * rx1), int(h * ry1)
-                sub_x2, sub_y2 = int(w * rx2), int(h * ry2)
-                sub_rgb = np.ascontiguousarray(rgb[sub_y1:sub_y2, sub_x1:sub_x2])
-                if sub_rgb.shape[0] < 40 or sub_rgb.shape[1] < 40:
-                    continue
+            else:
                 try:
-                    mp_sub = mp.Image(image_format=mp.ImageFormat.SRGB, data=sub_rgb)
+                    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
                     with _LANDMARKER_LOCK:
-                        res_sub = landmarker.detect(mp_sub)
-                    if res_sub.hand_landmarks:
-                        sw = sub_x2 - sub_x1
-                        sh = sub_y2 - sub_y1
-                        mapped_landmarks = []
-                        for raw_lm in res_sub.hand_landmarks:
-                            mapped = [
-                                LandmarkPt(
-                                    x=(sub_x1 + p.x * sw) / w,
-                                    y=(sub_y1 + p.y * sh) / h,
-                                    z=p.z,
-                                )
-                                for p in raw_lm
-                            ]
-                            mapped_landmarks.append(mapped)
-                        f_lm, p_lm = _select_fretting_hand(mapped_landmarks, res_sub.handedness, w, h)
-                        if f_lm is not None:
-                            fretting_lm = f_lm
-                            picking_lm = p_lm
-                            break
+                        res = landmarker.detect(mp_img)
+                    if res.hand_landmarks:
+                        fretting_lm, picking_lm = _select_fretting_hand(res.hand_landmarks, res.handedness, w, h)
                 except Exception:
-                    continue
+                    pass
 
     if fretting_lm is None and picking_lm is not None:
         return {
@@ -389,31 +384,9 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
             "hand_summary_text": "\n".join(summary_lines),
         }
 
-    # Fallback: MediaPipe가 손 관절을 못 찾은 경우, 지판 위 피부색 패치(운지 손 위치)를 찾아 타이트하게 크롭
-    best_patch = None
-    try:
-        ycrcb = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
-        skin = cv2.inRange(ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
-        cnts, _ = cv2.findContours(skin, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        candidates = []
-        for c in cnts:
-            if cv2.contourArea(c) > 100:
-                candidates.append(cv2.boundingRect(c))
-        if candidates:
-            candidates.sort(key=lambda b: b[2] * b[3], reverse=True)
-            best_patch = candidates[0]
-    except Exception:
-        pass
-
-    if best_patch:
-        bx, by, bw, bh = best_patch
-        x1 = max(0, bx - int(bw * 0.5))
-        x2 = min(w, bx + bw + int(bw * 0.5))
-        y1 = max(0, by - int(bh * 0.4))
-        y2 = min(h, by + bh + int(bh * 0.4))
-    else:
-        x1, y1, x2, y2 = int(w * 0.35), int(h * 0.15), int(w * 0.95), int(h * 0.65)
-
+    # Fallback: MediaPipe가 손 관절을 못 찾은 경우에도 절대 전체 프레임이나 하단 자막을 포함하지 않고,
+    # 넥 지판 영역을 타이트하게 크롭하여 자막/타브가 완전히 배제된 운지 클로즈업 제공
+    x1, y1, x2, y2 = int(w * 0.45), int(h * 0.05), int(w * 0.95), int(h * 0.65)
     clean_zoom_pil = enhance_fretboard_roi(rgb[y1:y2, x1:x2])
     annotated_zoom_pil = clean_zoom_pil.copy()
     box_1000 = [int(y1 * 1000 / h), int(x1 * 1000 / w), int(y2 * 1000 / h), int(x2 * 1000 / w)]
