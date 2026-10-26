@@ -23,11 +23,21 @@ import guitar_detector
 # ==============================================================================
 DEFAULT_API_KEYS = []
 _env_keys = os.environ.get("GEMINI_API_KEYS", "") or os.environ.get("GEMINI_API_KEY", "")
-if not _env_keys and hasattr(st, "secrets"):
-    if "GEMINI_API_KEYS" in st.secrets:
-        _env_keys = str(st.secrets["GEMINI_API_KEYS"])
-    elif "GEMINI_API_KEY" in st.secrets:
-        _env_keys = str(st.secrets["GEMINI_API_KEY"])
+
+if not _env_keys:
+    try:
+        sec = getattr(st, "secrets", None)
+        if sec:
+            if "GEMINI_API_KEYS" in sec:
+                raw_sec = sec["GEMINI_API_KEYS"]
+                if isinstance(raw_sec, list):
+                    DEFAULT_API_KEYS.extend([str(k).strip() for k in raw_sec if str(k).strip()])
+                else:
+                    _env_keys = str(raw_sec)
+            elif "GEMINI_API_KEY" in sec:
+                _env_keys = str(sec["GEMINI_API_KEY"])
+    except Exception:
+        pass
 
 if _env_keys.strip():
     for _k in re.split(r"[\n, ]+", _env_keys.strip()):
