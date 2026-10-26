@@ -397,9 +397,9 @@ def call_gemini_vision_first_fast(
     if not keys:
         raise ValueError("등록된 Gemini API Key가 없습니다. 상단 설정에서 API 키를 입력해 주세요.")
 
-    b64_full = _pil_to_b64_jpeg(full_frame_pil, max_dim=960, quality=82)
-    b64_clean = _pil_to_b64_jpeg(clean_zoom_pil, max_dim=960, quality=92)
-    b64_annot = _pil_to_b64_jpeg(annotated_zoom_pil, max_dim=800, quality=88)
+    b64_full = _pil_to_b64_jpeg(full_frame_pil, max_dim=720, quality=78)
+    b64_clean = _pil_to_b64_jpeg(clean_zoom_pil, max_dim=720, quality=85)
+    b64_annot = _pil_to_b64_jpeg(annotated_zoom_pil, max_dim=720, quality=82)
 
     payload = {
         "contents": [
