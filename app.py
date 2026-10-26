@@ -642,10 +642,14 @@ with col1:
                       if (input) {
                         const cur = parseFloat(input.value || 0);
                         if (Math.abs(cur - t) >= 0.08) {
+                          input.focus();
                           const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                           setter.call(input, t.toFixed(2));
                           input.dispatchEvent(new Event('input', { bubbles: true }));
                           input.dispatchEvent(new Event('change', { bubbles: true }));
+                          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                          input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                          input.blur();
                         }
                       }
                     };
@@ -664,29 +668,6 @@ with col1:
             height=0,
             width=0,
         )
-
-        st.caption("위 영상 플레이어에서 원하는 순간을 일시정지하면, 아래 분석 시점과 실제 프레임이 자동으로 일치됩니다.")
-
-        def _shift_video_time(delta_sec):
-            cur = float(st.session_state.get("manual_time_input", st.session_state.get("target_time", 0.0)))
-            new_t = max(0.0, min(local_video_dur, cur + delta_sec))
-            st.session_state["target_time"] = new_t
-            st.session_state["manual_time_input"] = new_t
-            st.rerun()
-
-        col_t1, col_t2, col_t3, col_t4 = st.columns(4)
-        with col_t1:
-            if st.button("-1.0초", use_container_width=True, key="shift_m10"):
-                _shift_video_time(-1.0)
-        with col_t2:
-            if st.button("-0.1초", use_container_width=True, key="shift_m01"):
-                _shift_video_time(-0.1)
-        with col_t3:
-            if st.button("+0.1초", use_container_width=True, key="shift_p01"):
-                _shift_video_time(0.1)
-        with col_t4:
-            if st.button("+1.0초", use_container_width=True, key="shift_p10"):
-                _shift_video_time(1.0)
 
         init_val = float(min(st.session_state.get("target_time", 0.0), local_video_dur))
         manual_timestamp = st.number_input(
