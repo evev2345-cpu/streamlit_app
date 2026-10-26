@@ -34,8 +34,8 @@ def get_hand_landmarker():
                     options = mp_vision.HandLandmarkerOptions(
                         base_options=base_options,
                         num_hands=2,
-                        min_hand_detection_confidence=0.20,
-                        min_hand_presence_confidence=0.20,
+                        min_hand_detection_confidence=0.15,
+                        min_hand_presence_confidence=0.15,
                     )
                     _LANDMARKER = mp_vision.HandLandmarker.create_from_options(options)
                 except Exception as e:
@@ -68,16 +68,10 @@ def _is_downward_picking_hand(lm, hd) -> bool:
     avg_mcp_y = (lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 4.0
     tip_diff = avg_tip_y - wrist_y
     mcp_diff = avg_tip_y - avg_mcp_y
-    is_right = hd and hd.category_name == "Right" and hd.score > 0.70
 
-    # 1) 손목/손마디보다 손끝이 명백히 아래쪽(+0.04 이상)을 향하고 있는 경우
-    if tip_diff > 0.04 and mcp_diff > 0.01:
-        return True
-    # 2) 오른손(Right)이면서 손끝이 손목보다 아래쪽에 위치하는 경우
-    if is_right and tip_diff > 0.01:
-        return True
-    # 3) 신뢰도 85% 이상의 오른손 단독인 경우
-    if is_right and hd.score > 0.85:
+    # 손목보다 손끝이 명백하게 아래쪽(+0.12 이상)으로 길게 처져 있는 경우만 피킹 손 판정
+    # (일반적인 기타 코드 운지 시 손가락이 구부러지는 각도로 인해 오판되는 것 방지)
+    if tip_diff > 0.12 and mcp_diff > 0.05:
         return True
     return False
 
@@ -86,16 +80,21 @@ def _select_fretting_hand(hand_landmarks_list, handedness_list, w: int, h: int):
     """
     감지된 손(1~2개) 중 기타 지판을 짚고 있는 '운지 손(Fretting Hand)'과
     바디 쪽의 '피킹 손(Picking Hand)'을 구분합니다.
-    - 손가락 관절/끝이 아래쪽을 향하면 100% 바디/사운드홀 위 피킹 손으로 판정하여 운지 손에서 즉시 배제합니다.
+    - 1개 손만 감지된 경우: 기타 강좌/분석 영상 특성상 화면 속 손은 거의 100% 운지 손이므로 기본적으로 운지 손으로 채택합니다.
+      단, 손목이 화면 상단에 위치하고 손가락이 아래로 완전히 늘어진 극단적인 경우에만 피킹 손으로 판별합니다.
+    - 2개 손이 감지된 경우: 상향 각도와 위치를 비교하여 지판을 쥔 손을 운지 손으로 우선 배정합니다.
     """
     if not hand_landmarks_list:
         return None, None
 
     if len(hand_landmarks_list) == 1:
-        hd = handedness_list[0][0] if (handedness_list and handedness_list[0]) else None
-        if _is_downward_picking_hand(hand_landmarks_list[0], hd):
-            return None, hand_landmarks_list[0]
-        return hand_landmarks_list[0], None
+        lm = hand_landmarks_list[0]
+        wrist_y = lm[0].y
+        avg_tip_y = (lm[8].y + lm[12].y + lm[16].y + lm[20].y) / 4.0
+        # 손목이 화면 상단(0.35 미만)에 있고 손끝이 0.20 이상 큰 폭으로 아래를 향하는 경우에만 피킹 손 단독 판정
+        if wrist_y < 0.35 and (avg_tip_y - wrist_y) > 0.20:
+            return None, lm
+        return lm, None
 
     evaluated = []
     for idx, lm in enumerate(hand_landmarks_list):
@@ -104,7 +103,7 @@ def _select_fretting_hand(hand_landmarks_list, handedness_list, w: int, h: int):
         wrist_y = lm[0].y
         avg_tip_y = (lm[8].y + lm[12].y + lm[16].y + lm[20].y) / 4.0
         avg_mcp_y = (lm[5].y + lm[9].y + lm[13].y + lm[17].y) / 4.0
-        upward_score = (wrist_y - avg_tip_y) * 2.0 + (avg_mcp_y - avg_tip_y)
+        upward_score = (wrist_y - avg_tip_y) * 2.5 + (avg_mcp_y - avg_tip_y)
         if hd:
             if hd.category_name == "Left":
                 upward_score += 1.5
@@ -293,16 +292,21 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
             "hand_summary_text": "\n".join(summary_lines),
         }
 
-    # Fallback: MediaPipe가 손을 못 찾은 경우 (가려짐 등) 전체 화면 중심부 사용
-    x1, y1, x2, y2 = int(w * 0.08), int(h * 0.12), int(w * 0.92), int(h * 0.85)
+    # Fallback: MediaPipe가 손을 못 찾은 경우 (블러, 조명 등) 지판 중심부를 고해상도로 집중 크롭
+    x1, y1, x2, y2 = int(w * 0.10), int(h * 0.22), int(w * 0.90), int(h * 0.78)
     clean_zoom_pil = enhance_fretboard_roi(rgb[y1:y2, x1:x2])
-    box_1000 = [120, 80, 850, 920]
+    annotated_zoom_pil = clean_zoom_pil.copy()
+    draw = ImageDraw.Draw(annotated_zoom_pil)
+    cw, ch = annotated_zoom_pil.size
+    # 시각적 가이드: 지판 관찰 ROI 테두리 가이드 표시
+    draw.rectangle([2, 2, cw - 3, ch - 3], outline="#007AFF", width=2)
+    box_1000 = [220, 100, 780, 900]
     return {
         "hand_detected": False,
         "clean_zoom_pil": clean_zoom_pil,
-        "annotated_zoom_pil": clean_zoom_pil,
+        "annotated_zoom_pil": annotated_zoom_pil,
         "box_1000": box_1000,
-        "hand_summary_text": "",
+        "hand_summary_text": "- **지판 시각 관찰 모드**: 손 관절 자동 마킹이 생략된 프레임입니다. 첨부된 지판 중심부 고해상도 확대 이미지의 프렛 와이어, 인레이 점, 실제 줄 접촉 위치를 시각적으로 직접 확인하여 판별하세요.",
     }
 
 
