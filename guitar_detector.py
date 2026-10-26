@@ -141,6 +141,61 @@ def enhance_fretboard_roi(rgb_crop: np.ndarray) -> Image.Image:
     return Image.fromarray(enhanced_rgb)
 
 
+def _find_fretting_hand_on_neck(rgb: np.ndarray, landmarker, w: int, h: int):
+    """
+    1. 기타 및 넥 영역 탐색
+    2. 넥(지판) 위 피부색/운지 손 후보 패치 추출
+    3. 해당 패치에 MediaPipe를 실행하여 정밀 관절 추출
+    """
+    try:
+        ycrcb = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
+        skin = cv2.inRange(ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        skin_clean = cv2.morphologyEx(skin, cv2.MORPH_OPEN, kernel)
+        skin_clean = cv2.morphologyEx(skin_clean, cv2.MORPH_CLOSE, kernel)
+
+        cnts, _ = cv2.findContours(skin_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        patches = []
+        for c in cnts:
+            area = cv2.contourArea(c)
+            if area > 100:
+                bx, by, bw, bh = cv2.boundingRect(c)
+                patches.append((area, bx, by, bw, bh))
+
+        patches.sort(key=lambda x: x[0], reverse=True)
+
+        for _, bx, by, bw, bh in patches:
+            pad_x = int(max(40, bw * 0.45))
+            pad_y = int(max(30, bh * 0.45))
+            cx1 = max(0, bx - pad_x)
+            cy1 = max(0, by - pad_y)
+            cx2 = min(w, bx + bw + pad_x)
+            cy2 = min(h, by + bh + pad_y)
+
+            crop_rgb = np.ascontiguousarray(rgb[cy1:cy2, cx1:cx2])
+            if crop_rgb.shape[0] < 40 or crop_rgb.shape[1] < 40:
+                continue
+
+            mp_sub = mp.Image(image_format=mp.ImageFormat.SRGB, data=crop_rgb)
+            with _LANDMARKER_LOCK:
+                res = landmarker.detect(mp_sub)
+            if res.hand_landmarks:
+                cw, ch = cx2 - cx1, cy2 - cy1
+                mapped_list = []
+                for raw_lm in res.hand_landmarks:
+                    mapped = [
+                        LandmarkPt((cx1 + p.x * cw) / w, (cy1 + p.y * ch) / h, p.z)
+                        for p in raw_lm
+                    ]
+                    mapped_list.append(mapped)
+                f_lm, p_lm = _select_fretting_hand(mapped_list, res.handedness, w, h)
+                if f_lm is not None:
+                    return f_lm, p_lm
+    except Exception:
+        pass
+    return None, None
+
+
 def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
     """
     전체 프레임에서 MediaPipe HandLandmarker로 운지 손을 정밀 탐지하고:
@@ -167,8 +222,14 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
         except Exception as e:
             print(f"MediaPipe 탐지 예외: {e}")
 
-        # 와이드 샷으로 인해 풀 프레임에서 손이 작아 미검출된 경우,
-        # 지판 넥 후보 영역(우측, 좌측, 중앙)을 분할 정밀 탐색(Multi-Region Sub-frame Search)하여 운지 손 검출
+        # 1단계: 기타 넥 영역 위 피부색/운지 손 후보 패치 정밀 탐색
+        if fretting_lm is None:
+            f_lm, p_lm = _find_fretting_hand_on_neck(rgb, landmarker, w, h)
+            if f_lm is not None:
+                fretting_lm = f_lm
+                picking_lm = p_lm
+
+        # 2단계: 와이드 샷으로 인해 풀 프레임에서 손이 작아 미검출된 경우 지판 넥 후보 영역 분할 탐색
         if fretting_lm is None:
             sub_regions = [
                 (0.40, 0.15, 1.00, 0.75),  # 우측 지판 넥 영역
