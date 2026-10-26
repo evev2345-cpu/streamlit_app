@@ -10,12 +10,15 @@ MediaPipe HandLandmarker(21개 3D 손 관절 키포인트) + 지판 기하학 �
 import math
 import os
 import threading
+from collections import namedtuple
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 import numpy as np
 from PIL import Image, ImageDraw
+
+LandmarkPt = namedtuple("LandmarkPt", ["x", "y", "z"])
 
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task")
 
@@ -163,6 +166,46 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
                 fretting_lm, picking_lm = _select_fretting_hand(res.hand_landmarks, res.handedness, w, h)
         except Exception as e:
             print(f"MediaPipe 탐지 예외: {e}")
+
+        # 와이드 샷으로 인해 풀 프레임에서 손이 작아 미검출된 경우,
+        # 지판 넥 후보 영역(우측, 좌측, 중앙)을 분할 정밀 탐색(Multi-Region Sub-frame Search)하여 운지 손 검출
+        if fretting_lm is None:
+            sub_regions = [
+                (0.40, 0.15, 1.00, 0.75),  # 우측 지판 넥 영역
+                (0.00, 0.15, 0.60, 0.75),  # 좌측 지판 넥 영역
+                (0.20, 0.15, 0.85, 0.75),  # 중앙 지판 넥 영역
+            ]
+            for rx1, ry1, rx2, ry2 in sub_regions:
+                sub_x1, sub_y1 = int(w * rx1), int(h * ry1)
+                sub_x2, sub_y2 = int(w * rx2), int(h * ry2)
+                sub_rgb = np.ascontiguousarray(rgb[sub_y1:sub_y2, sub_x1:sub_x2])
+                if sub_rgb.shape[0] < 40 or sub_rgb.shape[1] < 40:
+                    continue
+                try:
+                    mp_sub = mp.Image(image_format=mp.ImageFormat.SRGB, data=sub_rgb)
+                    with _LANDMARKER_LOCK:
+                        res_sub = landmarker.detect(mp_sub)
+                    if res_sub.hand_landmarks:
+                        sw = sub_x2 - sub_x1
+                        sh = sub_y2 - sub_y1
+                        mapped_landmarks = []
+                        for raw_lm in res_sub.hand_landmarks:
+                            mapped = [
+                                LandmarkPt(
+                                    x=(sub_x1 + p.x * sw) / w,
+                                    y=(sub_y1 + p.y * sh) / h,
+                                    z=p.z,
+                                )
+                                for p in raw_lm
+                            ]
+                            mapped_landmarks.append(mapped)
+                        f_lm, p_lm = _select_fretting_hand(mapped_landmarks, res_sub.handedness, w, h)
+                        if f_lm is not None:
+                            fretting_lm = f_lm
+                            picking_lm = p_lm
+                            break
+                except Exception:
+                    continue
 
     if fretting_lm is None and picking_lm is not None:
         return {
