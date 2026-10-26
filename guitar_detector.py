@@ -32,20 +32,32 @@ def get_hand_landmarker():
     if _LANDMARKER is None and os.path.exists(MODEL_PATH):
         with _LANDMARKER_LOCK:
             if _LANDMARKER is None:
+                # 1. 파일 경로 기반 초기화 시도
                 try:
-                    with open(MODEL_PATH, "rb") as f:
-                        model_bytes = f.read()
-                    base_options = mp_python.BaseOptions(model_asset_buffer=model_bytes)
+                    base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
                     options = mp_vision.HandLandmarkerOptions(
                         base_options=base_options,
                         num_hands=2,
-                        min_hand_detection_confidence=0.10,
-                        min_hand_presence_confidence=0.10,
+                        min_hand_detection_confidence=0.08,
+                        min_hand_presence_confidence=0.08,
                     )
                     _LANDMARKER = mp_vision.HandLandmarker.create_from_options(options)
-                except Exception as e:
-                    print(f"MediaPipe 초기화 경고: {e}")
-                    _LANDMARKER = None
+                except Exception as e1:
+                    # 2. 메모리 버퍼 기반 폴백 시도
+                    try:
+                        with open(MODEL_PATH, "rb") as f:
+                            model_bytes = f.read()
+                        base_options = mp_python.BaseOptions(model_asset_buffer=model_bytes)
+                        options = mp_vision.HandLandmarkerOptions(
+                            base_options=base_options,
+                            num_hands=2,
+                            min_hand_detection_confidence=0.08,
+                            min_hand_presence_confidence=0.08,
+                        )
+                        _LANDMARKER = mp_vision.HandLandmarker.create_from_options(options)
+                    except Exception as e2:
+                        print(f"MediaPipe 초기화 실패: path={e1}, buffer={e2}")
+                        _LANDMARKER = None
     return _LANDMARKER
 
 
