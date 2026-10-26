@@ -13,6 +13,7 @@ import cv2
 from PIL import Image
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 import audio_dsp
 import chord_visualizer
@@ -623,15 +624,90 @@ with col1:
     if mode == "image":
         st.info("단일 사진 모드: 사진 속 지판 프렛과 손가락 운지 관절을 시각적으로 정밀 분석합니다.")
     elif mode == "video":
-        manual_timestamp = st.slider(
+        components.html(
+            """
+            <script>
+            (function() {
+              try {
+                const doc = window.parent.document;
+                function syncVideoTime() {
+                  const videos = doc.querySelectorAll('video');
+                  videos.forEach(v => {
+                    if (v.dataset.pauseSyncBound) return;
+                    v.dataset.pauseSyncBound = "true";
+
+                    const onEvent = () => {
+                      const t = parseFloat((v.currentTime || 0).toFixed(2));
+                      const input = doc.querySelector('.st-key-manual_time_input input');
+                      if (input) {
+                        const cur = parseFloat(input.value || 0);
+                        if (Math.abs(cur - t) >= 0.08) {
+                          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                          setter.call(input, t.toFixed(2));
+                          input.dispatchEvent(new Event('input', { bubbles: true }));
+                          input.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                      }
+                    };
+
+                    v.addEventListener('pause', onEvent);
+                    v.addEventListener('seeked', onEvent);
+                  });
+                }
+
+                setInterval(syncVideoTime, 400);
+                syncVideoTime();
+              } catch(e) {}
+            })();
+            </script>
+            """,
+            height=0,
+            width=0,
+        )
+
+        st.caption("위 영상 플레이어에서 원하는 순간을 일시정지하면, 아래 분석 시점과 실제 프레임이 자동으로 일치됩니다.")
+
+        def _shift_video_time(delta_sec):
+            cur = float(st.session_state.get("manual_time_input", st.session_state.get("target_time", 0.0)))
+            new_t = max(0.0, min(local_video_dur, cur + delta_sec))
+            st.session_state["target_time"] = new_t
+            st.session_state["manual_time_input"] = new_t
+            st.rerun()
+
+        col_t1, col_t2, col_t3, col_t4 = st.columns(4)
+        with col_t1:
+            if st.button("-1.0초", use_container_width=True, key="shift_m10"):
+                _shift_video_time(-1.0)
+        with col_t2:
+            if st.button("-0.1초", use_container_width=True, key="shift_m01"):
+                _shift_video_time(-0.1)
+        with col_t3:
+            if st.button("+0.1초", use_container_width=True, key="shift_p01"):
+                _shift_video_time(0.1)
+        with col_t4:
+            if st.button("+1.0초", use_container_width=True, key="shift_p10"):
+                _shift_video_time(1.0)
+
+        init_val = float(min(st.session_state.get("target_time", 0.0), local_video_dur))
+        manual_timestamp = st.number_input(
             f"분석할 동영상 재생 시간 (초) [총 {local_video_dur:.1f}초]",
             min_value=0.0,
             max_value=float(max(1.0, local_video_dur)),
-            value=float(min(st.session_state["target_time"], local_video_dur)),
+            value=init_val,
             step=0.1,
-            format="%.2f초",
+            format="%.2f",
+            key="manual_time_input",
         )
-        st.caption(f"선택한 시점 기준 ±0.75초 구간의 오디오 주파수(FFT)와 프레임을 추출합니다.")
+        st.session_state["target_time"] = manual_timestamp
+
+        preview_img = extract_full_frame_fast(temp_video_path, manual_timestamp)
+        if preview_img:
+            st.image(
+                preview_img,
+                caption=f"분석될 실제 프레임 미리보기 ({manual_timestamp:.2f}초 시점)",
+                use_container_width=True,
+            )
+        st.caption(f"선택한 시점({manual_timestamp:.2f}초) 기준 ±0.75초 오디오(FFT)와 프레임을 정밀 분석합니다.")
     else:
         st.caption("파일을 업로드하면 분석 옵션이 활성화됩니다.")
 
