@@ -249,6 +249,71 @@ def build_movable_voicing(root_semi, quality, prefer_high_fret=None):
         if fret_5 <= 7 and fret_6 > 7:
             use_5th_string = True
 
+    if q in ['7#5', '7(#5)', '7aug', 'aug7', '+7', '7b13', '7(b13)', 'aug']:
+        if use_5th_string:
+            bf = fret_5
+            return {
+                'base_fret': max(1, bf - 1),
+                'dots': [
+                    {'string': 5, 'fret': bf, 'finger': 1},
+                    {'string': 4, 'fret': bf + 2, 'finger': 3},
+                    {'string': 3, 'fret': bf + 1, 'finger': 2},
+                    {'string': 2, 'fret': bf + 2, 'finger': 4},
+                ],
+                'markers': {6: 'x', 1: 'x'}
+            }
+        else:
+            bf = fret_6
+            return {
+                'base_fret': bf,
+                'dots': [
+                    {'string': 6, 'fret': bf, 'finger': 1},
+                    {'string': 4, 'fret': bf, 'finger': 1},
+                    {'string': 3, 'fret': bf + 1, 'finger': 2},
+                    {'string': 2, 'fret': bf + 1, 'finger': 3},
+                ],
+                'markers': {5: 'x', 1: 'x'}
+            }
+
+    if q in ['m7b5', 'm7(b5)', 'half-dim', 'ø', 'ø7', 'm7-5', 'm7(-5)']:
+        if use_5th_string:
+            bf = fret_5
+            return {
+                'base_fret': max(1, bf - 1),
+                'dots': [
+                    {'string': 5, 'fret': bf, 'finger': 1},
+                    {'string': 4, 'fret': bf + 1, 'finger': 3},
+                    {'string': 3, 'fret': bf, 'finger': 2},
+                    {'string': 2, 'fret': bf + 1, 'finger': 4},
+                ],
+                'markers': {6: 'x', 1: 'x'}
+            }
+        else:
+            bf = fret_6
+            return {
+                'base_fret': max(1, bf - 1),
+                'dots': [
+                    {'string': 6, 'fret': bf, 'finger': 1},
+                    {'string': 4, 'fret': bf, 'finger': 2},
+                    {'string': 3, 'fret': bf, 'finger': 3},
+                    {'string': 2, 'fret': bf - 1, 'finger': 1},
+                ],
+                'markers': {5: 'x', 1: 'x'}
+            }
+
+    if q in ['dim7', 'dim', '°7', '°']:
+        bf = fret_5
+        return {
+            'base_fret': max(1, bf - 1),
+            'dots': [
+                {'string': 5, 'fret': bf, 'finger': 1},
+                {'string': 4, 'fret': bf + 1, 'finger': 3},
+                {'string': 3, 'fret': bf - 1, 'finger': 2},
+                {'string': 2, 'fret': bf + 1, 'finger': 4},
+            ],
+            'markers': {6: 'x', 1: 'x'}
+        }
+
     if use_5th_string:
         bf = fret_5
         if q in ['m', 'min', 'minor', '-']:
@@ -389,12 +454,74 @@ def _safe_int(val, default=1):
         return default
 
 
+def sanitize_fingering_with_theory(chord_name: str, fingering_dict: dict) -> dict:
+    """
+    AI가 반환한 운지 딕셔너리가 화성학/운지 물리 법칙을 위배할 경우
+    (예: 7(#5) 코드에서 4번줄을 Maj7 프렛으로 짚거나 웅크린 새끼손가락을 짚었다고 오인하는 경우)
+    해당 코드의 정확한 물리적/화성학적 운지로 자동 보정합니다.
+    """
+    if not isinstance(fingering_dict, dict):
+        return fingering_dict
+
+    clean_name = str(chord_name or "").strip()
+    m = re.match(r'^([A-G][#b♯♭]?)(.*)$', clean_name, re.IGNORECASE)
+    if not m:
+        return fingering_dict
+
+    root_str = m.group(1).upper().replace('♯', '#').replace('♭', 'B')
+    quality = m.group(2).strip().lower()
+
+    # 1. markers 정리: 'x', 'o' 이외의 숫자(프렛 번호) 등이 들어있으면 필터링
+    if isinstance(fingering_dict.get("markers"), dict):
+        clean_m = {}
+        for k, v in fingering_dict["markers"].items():
+            v_s = str(v).strip().lower()
+            if v_s in ['x', 'mute']:
+                clean_m[int(k)] = 'x'
+            elif v_s in ['o', 'open', '0']:
+                clean_m[int(k)] = 'o'
+        fingering_dict["markers"] = clean_m
+
+    # 2. 7(#5) / 7aug / +7 계열 보정
+    if any(q in quality for q in ['7#5', '7(#5)', '7aug', 'aug7', '+7', '7b13', '7(b13)']):
+        dots = fingering_dict.get("dots") or []
+        root_semi = NOTE_TO_SEMITONE.get(root_str, 0)
+        fret_6 = (root_semi - 4) % 12
+        if fret_6 == 0:
+            fret_6 = 12
+
+        has_6th_root = any(d.get("string") == 6 for d in dots if isinstance(d, dict))
+        base_fret_in = _safe_int(fingering_dict.get("base_fret"), 0)
+        if has_6th_root or base_fret_in in [fret_6, fret_6 - 1]:
+            # 6번줄 루트 7(#5)의 정석 운지:
+            # 6th(fret_6, finger 1), 4th(fret_6, finger 1), 3rd(fret_6+1, finger 2), 2nd(fret_6+1, finger 3)
+            # 5번줄, 1번줄 뮤트. 새끼손가락(4번)은 사용하지 않음
+            fingering_dict["base_fret"] = fret_6
+            fingering_dict["barre"] = None
+            fingering_dict["dots"] = [
+                {"string": 6, "fret": fret_6, "finger": 1},
+                {"string": 4, "fret": fret_6, "finger": 1},
+                {"string": 3, "fret": fret_6 + 1, "finger": 2},
+                {"string": 2, "fret": fret_6 + 1, "finger": 3},
+            ]
+            fingering_dict["markers"] = {5: "x", 1: "x"}
+            fingering_dict["fingering_summary"] = (
+                f"검지(1번)가 {fret_6}프렛 6번줄(근음 {root_str})과 4번줄(단7도)을 짚고, "
+                f"중지(2번)와 약지(3번)가 {fret_6 + 1}프렛의 3번줄(3도)과 2번줄(#5도)을 누르는 {clean_name} 보이싱입니다. "
+                "(새끼손가락은 줄을 누르지 않고 웅크려 있으며, 5번줄과 1번줄은 자연스럽게 뮤트됩니다)"
+            )
+            return fingering_dict
+
+    return fingering_dict
+
+
 def generate_chord_svg(chord_name, fingering_dict=None, prefer_fret=None):
     """
     참고 이미지 스타일의 지판 다이어그램 SVG 생성
     """
     valid_custom = False
     if fingering_dict and isinstance(fingering_dict, dict):
+        fingering_dict = sanitize_fingering_with_theory(chord_name, fingering_dict)
         dots = fingering_dict.get('dots')
         barre = fingering_dict.get('barre')
         if (isinstance(dots, list) and len(dots) > 0) or (isinstance(barre, dict) and barre.get('fret')):
@@ -419,7 +546,11 @@ def generate_chord_svg(chord_name, fingering_dict=None, prefer_fret=None):
     if all_frets:
         min_f = min(all_frets)
         max_f = max(all_frets)
-        if max_f <= 4 and min_f >= 1:
+        markers_check = data.get('markers') or {}
+        has_open = any(str(markers_check.get(s)).strip().lower() in ['o', 'open', '0'] for s in range(1, 7))
+        if min_f >= 3 and not has_open:
+            base_fret = min_f
+        elif max_f <= 4 and min_f >= 1:
             base_fret = 1
         else:
             base_fret = max(1, min_f)
@@ -483,9 +614,16 @@ def generate_chord_svg(chord_name, fingering_dict=None, prefer_fret=None):
         for s_key, marker in markers.items():
             s_num = _safe_int(s_key, 0)
             if marker and 1 <= s_num <= 6:
+                m_str = str(marker).strip().lower()
+                if m_str in ['x', 'mute']:
+                    val = 'x'
+                elif m_str in ['o', 'open', '0']:
+                    val = 'o'
+                else:
+                    continue
                 y = start_y + (s_num - 1) * string_gap
                 svg.append(
-                    f'<text x="{start_x - 14}" y="{y + 4}" font-size="13" font-weight="800" fill="#0F1720" text-anchor="middle">{marker}</text>'
+                    f'<text x="{start_x - 14}" y="{y + 4}" font-size="13" font-weight="800" fill="#0F1720" text-anchor="middle">{val}</text>'
                 )
 
     barre_covered_strings = set()
@@ -564,6 +702,7 @@ def parse_ai_response(text: str):
 
     if fingering_dict and isinstance(fingering_dict, dict):
         detected_chord = str(fingering_dict.get("chord") or "C").strip()
+        fingering_dict = sanitize_fingering_with_theory(detected_chord, fingering_dict)
         summary = str(fingering_dict.get("fingering_summary") or "").strip()
         visual_obs = str(fingering_dict.get("finger_observations") or "").strip()
         prefer_fret = _safe_int(fingering_dict.get("base_fret"), None)
