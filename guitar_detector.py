@@ -33,12 +33,14 @@ def get_hand_landmarker():
         with _LANDMARKER_LOCK:
             if _LANDMARKER is None:
                 try:
-                    base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
+                    with open(MODEL_PATH, "rb") as f:
+                        model_bytes = f.read()
+                    base_options = mp_python.BaseOptions(model_asset_buffer=model_bytes)
                     options = mp_vision.HandLandmarkerOptions(
                         base_options=base_options,
                         num_hands=2,
-                        min_hand_detection_confidence=0.15,
-                        min_hand_presence_confidence=0.15,
+                        min_hand_detection_confidence=0.10,
+                        min_hand_presence_confidence=0.10,
                     )
                     _LANDMARKER = mp_vision.HandLandmarker.create_from_options(options)
                 except Exception as e:
@@ -83,21 +85,14 @@ def _select_fretting_hand(hand_landmarks_list, handedness_list, w: int, h: int):
     """
     감지된 손(1~2개) 중 기타 지판을 짚고 있는 '운지 손(Fretting Hand)'과
     바디 쪽의 '피킹 손(Picking Hand)'을 구분합니다.
-    - 1개 손만 감지된 경우: 기타 강좌/분석 영상 특성상 화면 속 손은 거의 100% 운지 손이므로 기본적으로 운지 손으로 채택합니다.
-      단, 손목이 화면 상단에 위치하고 손가락이 아래로 완전히 늘어진 극단적인 경우에만 피킹 손으로 판별합니다.
+    - 1개 손만 감지된 경우: 기타 강좌/분석 영상 특성상 화면 속 손은 100% 운지 손이므로 항상 채택합니다.
     - 2개 손이 감지된 경우: 상향 각도와 위치를 비교하여 지판을 쥔 손을 운지 손으로 우선 배정합니다.
     """
     if not hand_landmarks_list:
         return None, None
 
     if len(hand_landmarks_list) == 1:
-        lm = hand_landmarks_list[0]
-        wrist_y = lm[0].y
-        avg_tip_y = (lm[8].y + lm[12].y + lm[16].y + lm[20].y) / 4.0
-        # 손목이 화면 상단(0.35 미만)에 있고 손끝이 0.20 이상 큰 폭으로 아래를 향하는 경우에만 피킹 손 단독 판정
-        if wrist_y < 0.35 and (avg_tip_y - wrist_y) > 0.20:
-            return None, lm
-        return lm, None
+        return hand_landmarks_list[0], None
 
     evaluated = []
     for idx, lm in enumerate(hand_landmarks_list):
@@ -188,9 +183,7 @@ def _find_fretting_hand_on_neck(rgb: np.ndarray, landmarker, w: int, h: int):
                         for p in raw_lm
                     ]
                     mapped_list.append(mapped)
-                f_lm, p_lm = _select_fretting_hand(mapped_list, res.handedness, w, h)
-                if f_lm is not None:
-                    return f_lm, p_lm
+                return mapped_list[0], None
     except Exception:
         pass
     return None, None
@@ -286,12 +279,12 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
         hand_w = max(40.0, hx_max - hx_min)
         hand_h = max(40.0, hy_max - hy_min)
 
-        # 지판의 프렛 번호와 인레이 점(3, 5, 7, 9, 12프렛)을 AI가 정확히 셀 수 있도록
-        # 좌우(기타 넥 방향)로는 손 너비의 2.2배씩 넉넉하게 포함하고, 상하로는 손 주변만 깔끔하게 크롭
-        x1 = int(max(0, hx_min - hand_w * 2.2))
-        x2 = int(min(w, hx_max + hand_w * 2.2))
-        y1 = int(max(0, hy_min - hand_h * 0.85))
-        y2 = int(min(h, hy_max + hand_h * 0.65))
+        # 운지 클로즈업 (Fretting Hand Close-up):
+        # 짚고 있는 손가락과 줄/프렛 접점이 화면을 가득 채우도록 손 주변만 타이트하게 집중 크롭
+        x1 = int(max(0, hx_min - hand_w * 0.75))
+        x2 = int(min(w, hx_max + hand_w * 0.75))
+        y1 = int(max(0, hy_min - hand_h * 0.45))
+        y2 = int(min(h, hy_max + hand_h * 0.55))
 
         clean_crop_rgb = rgb[y1:y2, x1:x2]
         clean_zoom_pil = enhance_fretboard_roi(clean_crop_rgb)
@@ -396,21 +389,40 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
             "hand_summary_text": "\n".join(summary_lines),
         }
 
-    # Fallback: MediaPipe가 손을 못 찾은 경우 (블러, 조명 등) 지판 중심부를 고해상도로 집중 크롭
-    x1, y1, x2, y2 = int(w * 0.10), int(h * 0.22), int(w * 0.90), int(h * 0.78)
+    # Fallback: MediaPipe가 손 관절을 못 찾은 경우, 지판 위 피부색 패치(운지 손 위치)를 찾아 타이트하게 크롭
+    best_patch = None
+    try:
+        ycrcb = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
+        skin = cv2.inRange(ycrcb, np.array([0, 133, 77]), np.array([255, 173, 127]))
+        cnts, _ = cv2.findContours(skin, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        candidates = []
+        for c in cnts:
+            if cv2.contourArea(c) > 100:
+                candidates.append(cv2.boundingRect(c))
+        if candidates:
+            candidates.sort(key=lambda b: b[2] * b[3], reverse=True)
+            best_patch = candidates[0]
+    except Exception:
+        pass
+
+    if best_patch:
+        bx, by, bw, bh = best_patch
+        x1 = max(0, bx - int(bw * 0.5))
+        x2 = min(w, bx + bw + int(bw * 0.5))
+        y1 = max(0, by - int(bh * 0.4))
+        y2 = min(h, by + bh + int(bh * 0.4))
+    else:
+        x1, y1, x2, y2 = int(w * 0.35), int(h * 0.15), int(w * 0.95), int(h * 0.65)
+
     clean_zoom_pil = enhance_fretboard_roi(rgb[y1:y2, x1:x2])
     annotated_zoom_pil = clean_zoom_pil.copy()
-    draw = ImageDraw.Draw(annotated_zoom_pil)
-    cw, ch = annotated_zoom_pil.size
-    # 시각적 가이드: 지판 관찰 ROI 테두리 가이드 표시
-    draw.rectangle([2, 2, cw - 3, ch - 3], outline="#007AFF", width=2)
-    box_1000 = [220, 100, 780, 900]
+    box_1000 = [int(y1 * 1000 / h), int(x1 * 1000 / w), int(y2 * 1000 / h), int(x2 * 1000 / w)]
     return {
         "hand_detected": False,
         "clean_zoom_pil": clean_zoom_pil,
         "annotated_zoom_pil": annotated_zoom_pil,
         "box_1000": box_1000,
-        "hand_summary_text": "- **지판 시각 관찰 모드**: 손 관절 자동 마킹이 생략된 프레임입니다. 첨부된 지판 중심부 고해상도 확대 이미지의 프렛 와이어, 인레이 점, 실제 줄 접촉 위치를 시각적으로 직접 확인하여 판별하세요.",
+        "hand_summary_text": "- **운지 시각 관찰 모드**: 지판 위 운지 손 고해상도 확대 이미지가 제공됩니다. 손가락이 누른 줄과 프렛을 직접 확인하여 판별하세요.",
     }
 
 
