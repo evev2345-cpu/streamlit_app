@@ -86,13 +86,13 @@ if is_light_mode:
         --app-text: #1E293B;
         --title-color: #0F172A;
         --sub-color: #475569;
-        --toggle-bg: #F1F5F9;
+        --toggle-bg: #F8FAFC;
         --toggle-text: #475569;
-        --toggle-border: #CBD5E1;
-        --toggle-hover-bg: #E2E8F0;
-        --toggle-hover-border: #94A3B8;
+        --toggle-border: #E2E8F0;
+        --toggle-hover-bg: #F1F5F9;
+        --toggle-hover-border: #CBD5E1;
         --bulb-svg: url("{BULB_ON_SVG}");
-        --bulb-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+        --bulb-shadow: drop-shadow(0 0 6px rgba(245, 158, 11, 0.7));
         --input-bg: #F8FAFC;
         --input-text: #1E293B;
         --input-border: #CBD5E1;
@@ -177,7 +177,45 @@ h1, h2, h3, h4, h5, h6, p, label, span {{
     color: var(--sub-color);
     font-weight: 500;
 }}
-div[data-testid="stButton"] > button[kind="primary"] {{
+.st-key-theme_switch_btn {
+    margin-bottom: 0.6rem !important;
+}
+.st-key-theme_switch_btn button {
+    background-color: var(--toggle-bg) !important;
+    color: var(--toggle-text) !important;
+    border: 1px solid var(--toggle-border) !important;
+    border-radius: 999px !important;
+    padding: 6px 16px !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
+    transition: all 0.2s ease !important;
+}
+.st-key-theme_switch_btn button * {
+    color: var(--toggle-text) !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+}
+.st-key-theme_switch_btn button::before {
+    content: "";
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    background-image: var(--bulb-svg);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    filter: var(--bulb-shadow);
+}
+.st-key-theme_switch_btn button:hover {
+    background-color: var(--toggle-hover-bg) !important;
+    border-color: var(--toggle-hover-border) !important;
+    transform: translateY(-1px);
+}
+div[data-testid="stButton"] > button[kind="primary"] {
     background-color: var(--primary-btn-bg) !important;
     color: #FFFFFF !important;
     border: var(--primary-btn-border) !important;
@@ -185,11 +223,11 @@ div[data-testid="stButton"] > button[kind="primary"] {{
     font-size: 1.05rem !important;
     padding: 0.65rem 1.2rem !important;
     border-radius: 8px !important;
-}}
-div[data-testid="stButton"] > button[kind="primary"]:hover {{
+}
+div[data-testid="stButton"] > button[kind="primary"]:hover {
     background-color: var(--primary-btn-hover) !important;
-}}
-.chord-card {{
+}
+.chord-card {
     background: #FFFFFF;
     border-radius: 10px;
     padding: 10px;
@@ -197,34 +235,33 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {{
     justify-content: center;
     align-items: center;
     border: 1px solid #CBD5E1;
-}}
-div[data-testid="stFileUploader"] {{
+}
+div[data-testid="stFileUploader"] {
     background-color: var(--uploader-bg);
     border: 1px dashed var(--uploader-border);
     border-radius: 8px;
     padding: 0.5rem;
-}}
+}
 </style>
 """, unsafe_allow_html=True)
 
-# 상단 헤더: 테마 토글 및 파란색 테두리 배너
-head_left, head_right = st.columns([8.2, 1.8], vertical_alignment="center")
-with head_left:
-    st.markdown("""
-    <div class="banner-container">
-        <div class="banner-title">이 코드 뭔가요?</div>
-        <div class="banner-sub">사운드 & 비전 기타 코드 AI 정밀 분석기</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-with head_right:
+# 상단 좌측: 테마 토글 (전구 아이콘 버튼)
+theme_col, _ = st.columns([2.5, 7.5])
+with theme_col:
     theme_label = "다크모드로 전환" if is_light_mode else "라이트모드로 전환"
     st.button(
-        f"전구 {theme_label}",
-        key="theme_toggle_btn",
+        theme_label,
+        key="theme_switch_btn",
         on_click=_toggle_theme_mode,
-        use_container_width=True,
     )
+
+# 메인 배너: 파란색 테두리 전폭 배너
+st.markdown("""
+<div class="banner-container">
+    <div class="banner-title">이 코드 뭔가요?</div>
+    <div class="banner-sub">사운드 & 비전 기타 코드 AI 정밀 분석기</div>
+</div>
+""", unsafe_allow_html=True)
 
 # API 키 입력 지원 (환경변수나 Streamlit secrets가 설정되지 않은 경우)
 if not DEFAULT_API_KEYS:
