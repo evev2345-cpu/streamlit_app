@@ -177,10 +177,10 @@ h1, h2, h3, h4, h5, h6, p, label, span {{
     color: var(--sub-color);
     font-weight: 500;
 }}
-.st-key-theme_switch_btn {
+.st-key-theme_switch_btn {{
     margin-bottom: 0.6rem !important;
-}
-.st-key-theme_switch_btn button {
+}}
+.st-key-theme_switch_btn button {{
     background-color: var(--toggle-bg) !important;
     color: var(--toggle-text) !important;
     border: 1px solid var(--toggle-border) !important;
@@ -193,13 +193,13 @@ h1, h2, h3, h4, h5, h6, p, label, span {{
     gap: 8px !important;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
     transition: all 0.2s ease !important;
-}
-.st-key-theme_switch_btn button * {
+}}
+.st-key-theme_switch_btn button * {{
     color: var(--toggle-text) !important;
     font-size: 13px !important;
     font-weight: 600 !important;
-}
-.st-key-theme_switch_btn button::before {
+}}
+.st-key-theme_switch_btn button::before {{
     content: "";
     display: inline-block;
     width: 18px;
@@ -209,13 +209,13 @@ h1, h2, h3, h4, h5, h6, p, label, span {{
     background-position: center;
     background-size: contain;
     filter: var(--bulb-shadow);
-}
-.st-key-theme_switch_btn button:hover {
+}}
+.st-key-theme_switch_btn button:hover {{
     background-color: var(--toggle-hover-bg) !important;
     border-color: var(--toggle-hover-border) !important;
     transform: translateY(-1px);
-}
-div[data-testid="stButton"] > button[kind="primary"] {
+}}
+div[data-testid="stButton"] > button[kind="primary"] {{
     background-color: var(--primary-btn-bg) !important;
     color: #FFFFFF !important;
     border: var(--primary-btn-border) !important;
@@ -223,11 +223,11 @@ div[data-testid="stButton"] > button[kind="primary"] {
     font-size: 1.05rem !important;
     padding: 0.65rem 1.2rem !important;
     border-radius: 8px !important;
-}
-div[data-testid="stButton"] > button[kind="primary"]:hover {
+}}
+div[data-testid="stButton"] > button[kind="primary"]:hover {{
     background-color: var(--primary-btn-hover) !important;
-}
-.chord-card {
+}}
+.chord-card {{
     background: #FFFFFF;
     border-radius: 10px;
     padding: 10px;
@@ -235,13 +235,13 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
     justify-content: center;
     align-items: center;
     border: 1px solid #CBD5E1;
-}
-div[data-testid="stFileUploader"] {
+}}
+div[data-testid="stFileUploader"] {{
     background-color: var(--uploader-bg);
     border: 1px dashed var(--uploader-border);
     border-radius: 8px;
     padding: 0.5rem;
-}
+}}
 </style>
 """, unsafe_allow_html=True)
 
