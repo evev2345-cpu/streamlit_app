@@ -107,6 +107,8 @@ if is_light_mode:
         --uploader-bg: #F8FAFC;
         --uploader-border: #CBD5E1;
         --uploader-text: #475569;
+        --uploader-subtext: #64748B;
+        --uploader-icon: #64748B;
     """
 else:
     theme_vars = f"""
@@ -134,7 +136,9 @@ else:
         --alert-border: #1B3A57;
         --uploader-bg: #162230;
         --uploader-border: #2B4E73;
-        --uploader-text: #CBD5E1;
+        --uploader-text: #94A3B8;
+        --uploader-subtext: #64748B;
+        --uploader-icon: #94A3B8;
     """
 
 st.markdown(f"""
@@ -237,10 +241,43 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {{
     border: 1px solid #CBD5E1;
 }}
 div[data-testid="stFileUploader"] {{
-    background-color: var(--uploader-bg);
-    border: 1px dashed var(--uploader-border);
-    border-radius: 8px;
-    padding: 0.5rem;
+    background-color: var(--uploader-bg) !important;
+    border: 1px dashed var(--uploader-border) !important;
+    border-radius: 10px !important;
+    padding: 0.6rem !important;
+}}
+div[data-testid="stFileUploader"] label,
+div[data-testid="stFileUploader"] label p,
+div[data-testid="stFileUploader"] label span {{
+    color: var(--uploader-text) !important;
+    font-weight: 600 !important;
+}}
+div[data-testid="stFileUploader"] section {{
+    background-color: transparent !important;
+}}
+div[data-testid="stFileUploader"] section * {{
+    color: var(--uploader-text) !important;
+}}
+div[data-testid="stFileUploader"] [data-testid="stMarkdownContainer"] p {{
+    color: var(--uploader-text) !important;
+}}
+div[data-testid="stFileUploader"] small {{
+    color: var(--uploader-subtext) !important;
+}}
+div[data-testid="stFileUploader"] svg,
+div[data-testid="stFileUploader"] svg * {{
+    color: var(--uploader-icon) !important;
+    fill: var(--uploader-icon) !important;
+    stroke: var(--uploader-icon) !important;
+}}
+div[data-testid="stFileUploader"] button {{
+    background-color: var(--toggle-bg) !important;
+    color: var(--uploader-text) !important;
+    border: 1px solid var(--toggle-border) !important;
+    border-radius: 6px !important;
+}}
+div[data-testid="stFileUploader"] button * {{
+    color: var(--uploader-text) !important;
 }}
 </style>
 """, unsafe_allow_html=True)
