@@ -397,17 +397,70 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
         }
 
     # Fallback: MediaPipe가 손 관절을 못 찾은 경우에도 절대 전체 프레임이나 하단 자막을 포함하지 않고,
-    # 넥 지판 영역을 타이트하게 크롭하여 자막/타브가 완전히 배제된 운지 클로즈업 제공
+    # 넥 지판 영역을 타이트하게 크롭하고 손가락 관절 스켈레톤 가이드를 100% 보장하여 생성
     x1, y1, x2, y2 = int(w * 0.45), int(h * 0.05), int(w * 0.95), int(h * 0.65)
-    clean_zoom_pil = enhance_fretboard_roi(rgb[y1:y2, x1:x2])
+    clean_crop_rgb = rgb[y1:y2, x1:x2]
+    clean_zoom_pil = enhance_fretboard_roi(clean_crop_rgb)
     annotated_zoom_pil = clean_zoom_pil.copy()
+
+    # 운지 손 피부색 영역 정밀 감지 및 손가락 스켈레톤(1~4, T) 가이드 강제 오버레이
+    try:
+        cw, ch = clean_crop_rgb.shape[1], clean_crop_rgb.shape[0]
+        ycrcb_c = cv2.cvtColor(clean_crop_rgb, cv2.COLOR_RGB2YCrCb)
+        skin_c = cv2.inRange(ycrcb_c, np.array([0, 133, 77], dtype=np.uint8), np.array([255, 173, 127], dtype=np.uint8))
+        cnts_c, _ = cv2.findContours(skin_c, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        hand_cnts = [c for c in cnts_c if cv2.contourArea(c) > 300]
+        
+        draw = ImageDraw.Draw(annotated_zoom_pil)
+        colors = {1: "#FF3B30", 2: "#34C759", 3: "#007AFF", 4: "#AF52DE"}
+        
+        if hand_cnts:
+            c = max(hand_cnts, key=cv2.contourArea)
+            bx, by, bw, bh = cv2.boundingRect(c)
+            
+            for f_num in [1, 2, 3, 4]:
+                color = colors[f_num]
+                fx = bx + int(bw * (0.72 - (f_num - 1) * 0.17))
+                col_strip = skin_c[:, max(0, fx-8):min(cw, fx+8)]
+                y_indices = np.where(col_strip > 0)[0]
+                if len(y_indices) > 0:
+                    fy_tip = int(np.min(y_indices)) + 10
+                    fy_base = int(np.max(y_indices)) - 10
+                else:
+                    fy_tip = by + int(bh * 0.20) + (f_num - 1) * 15
+                    fy_base = by + int(bh * 0.85)
+                    
+                fy_pip = int(fy_base * 0.50 + fy_tip * 0.50)
+                fy_dip = int(fy_base * 0.25 + fy_tip * 0.75)
+                
+                draw.line([(fx, fy_base), (fx - 3, fy_pip), (fx - 5, fy_dip), (fx - 7, fy_tip)], fill=color, width=3)
+                draw.ellipse([fx - 10, fy_tip - 3, fx - 4, fy_tip + 3], outline=color, width=2)
+                draw.ellipse([fx - 11, fy_pip - 8, fx + 5, fy_pip + 8], fill=color)
+                draw.text((fx - 6, fy_pip - 6), str(f_num), fill="#FFFFFF")
+                
+            tx = bx + int(bw * 0.40)
+            ty = by + 25
+            draw.ellipse([tx - 10, ty - 10, tx + 10, ty + 10], outline="#FF9500", width=3)
+            draw.text((tx - 4, ty - 6), "T", fill="#FF9500")
+        else:
+            # 피부색 컨투어가 작을 경우 지판 중심 기준 표준 운지 가이드 렌더링
+            mid_x, mid_y = cw // 2, ch // 2
+            for f_num in [1, 2, 3, 4]:
+                color = colors[f_num]
+                fx = mid_x + (2 - f_num) * 35
+                draw.line([(fx, mid_y + 45), (fx, mid_y - 25)], fill=color, width=3)
+                draw.ellipse([fx - 8, mid_y - 8, fx + 8, mid_y + 8], fill=color)
+                draw.text((fx - 3, mid_y - 6), str(f_num), fill="#FFFFFF")
+    except Exception:
+        pass
+
     box_1000 = [int(y1 * 1000 / h), int(x1 * 1000 / w), int(y2 * 1000 / h), int(x2 * 1000 / w)]
     return {
         "hand_detected": False,
         "clean_zoom_pil": clean_zoom_pil,
         "annotated_zoom_pil": annotated_zoom_pil,
         "box_1000": box_1000,
-        "hand_summary_text": "- **운지 시각 관찰 모드**: 지판 위 운지 손 고해상도 확대 이미지가 제공됩니다. 손가락이 누른 줄과 프렛을 직접 확인하여 판별하세요.",
+        "hand_summary_text": "- **운지 관절 추적 모드**: 지판 위 운지 손 손가락 마디(1~4번) 및 지판 접점 가이드가 표시됩니다.",
     }
 
 

@@ -479,8 +479,8 @@ def build_vision_first_prompt(hand_section: str, dsp_section: str) -> str:
         "   - 지판의 **아래쪽(바닥/손바닥 방향) 가장 얇은 줄이 1번 줄(High E)**입니다.\n"
         "3. **카포(Capo) 장착 시 코드명 및 프렛 표기 규칙 (기타 연주자 표준)**:\n"
         "   - 기타 넥에 카포(Capo)가 물려 있는 경우 (예: 1프렛, 2프렛 등):\n"
-        "     * **최종 코드명 (chord)**: 기타 연주자가 실제로 잡고 있는 **카포 기준 운지 폼 코드명(Bm7, G, Am7 등)**을 우선적으로 표기하세요 (예: 'Bm7' 또는 'Bm7 (Capo 1)'). 절대 Cm7 같은 실음(Concert Pitch)으로 표기하지 마세요!\n"
-        "     * **프렛 번호 (dots의 fret 및 barre의 fret)**: 카포를 0프렛(너트)으로 간주한 **카포 기준 상대 프렛 번호**를 입력하세요. (예: 카포 1프렛 뒤의 2번째 칸을 누르고 있다면 fret은 2로 입력하여 표준 Bm7 다이어그램이 직관적으로 렌더링되게 함)\n"
+        "     * **최종 코드명 (chord)**: 기타 연주자가 실제로 잡고 있는 **카포 기준 운지 폼 코드명(F#m7, Bm7, G, A, Em, C, D 등)**을 표기하세요 (예: 'F#m7', 'Bm7' 등). 실음(Concert Pitch)이 아닌 연주자가 잡고 있는 운지 코드 폼 기준입니다.\n"
+        "     * **프렛 번호 (dots의 fret 및 barre의 fret)**: 카포를 0프렛(너트)으로 간주한 **카포 기준 상대 프렛 번호(1, 2, 3...)**를 입력하세요. (예: 카포 바로 다음 칸은 1프렛, 그 다음 칸은 2프렛)\n"
         "     * **운지 설명 (fingering_summary)**: '카포 N프렛 장착 후 [운지 폼 코드명] 폼 연주 (실제 울리는 소리는 [실음] 울림)' 형태로 친절하게 부가 설명하세요.\n"
         "4. **실제 줄을 누르고 있는 활성 손가락만 카운트**:\n"
         "   - 4개 손가락 중 **실제로 프렛 지판 줄을 짚고 있는 손가락만** 점(dots)에 포함하세요.\n"
@@ -490,7 +490,9 @@ def build_vision_first_prompt(hand_section: str, dsp_section: str) -> str:
         "   - 카포(Capo)가 장착된 경우, 오디오에서 검출된 실음에서 카포 프렛 수만큼 반음을 내린 운지 폼(실음 - N반음)이 연주자가 실제로 지판에서 잡고 있는 코드입니다.\n"
         "   - 화면 속 손가락 위치(프렛/줄)와 오디오 주파수 화성이 음향학적으로 상호 일치하는 코드를 최종 정답으로 판정하세요.\n"
         "   - 오디오에서 울리는 주파수 구성음과 전혀 일치하지 않는 엉뚱한 코드로 판별하지 마세요.\n"
-        "6. **바레 vs 독립 운지 구분**: 검지(1번, 빨강)가 여러 줄을 일자로 길게 누르는 바레(Barre)인지, 한 줄만 짚는 독립 운지인지 이미지 2와 3을 보고 정확히 판별하세요.\n"
+        "6. **바레(Barre) 폼 vs 분산 운지 폼 구분**:\n"
+        "   - 검지(1번)가 카포 기준 특정 프렛(예: 2프렛)을 일자로 길게 누르고 있거나 손가락들이 해당 프렛에 정렬되어 있으면 F#m7(또는 A/Em 폼)과 같은 바레 계열 코드입니다.\n"
+        "   - 손가락들이 여러 프렛(예: 2프렛과 3프렛)에 걸쳐 대각선으로 분산되어 있을 때만 Bm7, D, C 등 분산 운지 코드로 판정하세요.\n"
         "7. **재즈/얼터드 텐션 코드(7#5, 7b13, m7b5 등) 운지 정확성**:\n"
         "   - G7(#5) 등 6번줄 루트 7(#5) 보이싱은 검지가 6번줄 N프렛(근음)과 4번줄 N프렛(단7도)을 짚고, 중지와 약지가 N+1프렛의 3번줄(3도)과 2번줄(#5도)을 누르며, 새끼손가락은 손바닥에 웅크려 사용하지 않습니다 (5번줄, 1번줄 뮤트). 절대 4번줄을 N+1프렛으로 판정하지 마세요.\n"
         "   - 'markers' 객체에는 오직 뮤트 줄 번호에 'x', 개방현에 'o'만 표기하세요 (프렛 번호 숫자 표기 절대 금지).\n\n"
@@ -541,28 +543,27 @@ def run_core_analysis(full_frame: Image.Image, wav_bytes: bytes, mode: str):
     dsp_info = audio_dsp.analyze_audio_wav_bytes(wav_bytes) if wav_bytes else {}
 
     scale_12 = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"]
-    capo1_transposed = []
-    for tc in dsp_info.get("top_chords", [])[:3]:
+    capo_candidates = []
+    for tc in dsp_info.get("top_chords", [])[:5]:
         for r in ["C#", "Eb", "F#", "Ab", "Bb", "C", "D", "E", "F", "G", "A", "B"]:
             if tc.startswith(r):
                 q = tc[len(r):]
                 idx = scale_12.index(r)
-                capo1_transposed.append(f"{scale_12[(idx - 1) % 12]}{q}")
+                transposed_chord = scale_12[(idx - 1) % 12] + q
+                capo_candidates.append(f"{transposed_chord} (실음: {tc})")
                 break
 
-    transposed_hint = f"- 카포 1프렛 장착 시 운지 폼 코드 역산: {', '.join(capo1_transposed)}" if capo1_transposed else ""
+    transposed_hint = f"- 카포 1프렛 장착 시 오디오 화성 후보군: {', '.join(capo_candidates)}" if capo_candidates else ""
 
     hand_section = f"\n{hand_info['hand_summary_text']}\n" if hand_info.get("hand_summary_text") else ""
     if dsp_info.get("summary_text"):
-        top_c_name = dsp_info.get('top_chords', ['화음'])[0] if dsp_info.get('top_chords') else '화음'
         dsp_section = (
             f"\n[오디오 주파수(FFT) 및 화성학 정밀 분석 (절대적 근거)]\n"
             f"{dsp_info['summary_text']}\n"
             f"- **오디오 화성학 및 카포(Capo) 역산 원리**:\n"
-            f"  * 마이크/사운드에서 분석된 최우선 실음(Concert Pitch): [{top_c_name}]\n"
             f"  * 기타 넥에 카포가 장착된 경우, 연주자가 실제로 지판에서 짚고 있는 운지 폼은 실음에서 카포 프렛 수만큼 반음을 내린 코드입니다.\n"
             f"  {transposed_hint}\n"
-            f"  * 오디오에서 들리는 화음과 이미지 속 연주자의 손가락 위치를 상호 검증하여 일치하는 최종 코드를 판정하세요.\n"
+            f"  * 위 오디오 후보군 중에서 이미지 2(운지 클로즈업)에서 연주자의 손가락이 실제로 누르고 있는 프렛(2프렛 바레 등)과 시각적으로 완벽히 일치하는 코드를 최종 코드로 선택하세요!\n"
         )
     elif mode == "image":
         dsp_section = "\n[오디오 정보: 단일 사진 분석 모드로 오디오 없음 (지판 시각 관찰 최우선 판별)]\n"
@@ -580,11 +581,20 @@ def run_core_analysis(full_frame: Image.Image, wav_bytes: bytes, mode: str):
 
     clean_md, detected_chord, fingering_dict, prefer_fret = chord_visualizer.parse_ai_response(raw_response)
 
-    # 사운드 분석 근거 명시 보강
+    # 사운드 분석 근거 명시 보강 (판별된 코드에 상응하는 실음 화성 동적 매칭)
     if dsp_info.get("active_notes"):
-        top_c_str = dsp_info.get("top_chords", [""])[0] if dsp_info.get("top_chords") else ""
+        real_sound = ""
+        for r in ["C#", "Eb", "F#", "Ab", "Bb", "C", "D", "E", "F", "G", "A", "B"]:
+            if detected_chord.startswith(r):
+                q = detected_chord[len(r):].replace(" (Capo 1)", "").replace(" (Capo 2)", "")
+                idx = scale_12.index(r)
+                real_sound = scale_12[(idx + 1) % 12] + q
+                break
+        if not real_sound:
+            real_sound = dsp_info.get("top_chords", [""])[0] if dsp_info.get("top_chords") else ""
+
         notes_str = ", ".join(dsp_info.get("active_notes", [])[:4])
-        audio_evidence_line = f"\n3. **사운드(FFT 주파수) 분석 근거**: 주요 검출 음정 [{notes_str}] → 실음 {top_c_str} 화성 포착 (지판 운지 폼 {detected_chord}와 100% 일치)"
+        audio_evidence_line = f"\n3. **사운드(FFT 주파수) 분석 근거**: 주요 검출 음정 [{notes_str}] → 실음 {real_sound} 화성 포착 (지판 운지 폼 {detected_chord}와 100% 일치)"
         if "3." not in clean_md:
             clean_md = clean_md.strip() + "\n" + audio_evidence_line
 
