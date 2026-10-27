@@ -614,6 +614,7 @@ def run_core_analysis(full_frame: Image.Image, wav_bytes: bytes, mode: str):
         "annotated_full_frame": annotated_full_frame,
         "wav_bytes": wav_bytes,
         "used_model": used_model,
+        "landmarker_error": hand_info.get("landmarker_error"),
     }
 
 
@@ -813,6 +814,8 @@ with col2:
                     caption="손가락 관절 추적 (1:검지, 2:중지, 3:약지, 4:새끼, T:엄지)",
                     use_container_width=True,
                 )
+                if res.get("landmarker_error"):
+                    st.caption(f"참고: {res['landmarker_error']} (Streamlit Cloud 우측 하단 Manage app -> Settings -> Reboot App을 실행하시면 정품 21개 3D 관절 스켈레톤이 즉시 활성화됩니다)")
             with tab_clean:
                 st.image(
                     res["clean_zoom_img"],

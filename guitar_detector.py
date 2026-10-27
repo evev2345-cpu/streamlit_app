@@ -23,15 +23,25 @@ LandmarkPt = namedtuple("LandmarkPt", ["x", "y", "z"])
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task")
 
 _LANDMARKER = None
+_LANDMARKER_ERROR = None
 _LANDMARKER_LOCK = threading.Lock()
 _CLAHE = cv2.createCLAHE(clipLimit=1.6, tileGridSize=(8, 8))
 
 
 def get_hand_landmarker():
-    global _LANDMARKER
-    if _LANDMARKER is None and os.path.exists(MODEL_PATH):
+    global _LANDMARKER, _LANDMARKER_ERROR
+    if _LANDMARKER is None:
         with _LANDMARKER_LOCK:
             if _LANDMARKER is None:
+                # 0. 모델 파일 누락 시 자동 다운로드
+                if not os.path.exists(MODEL_PATH) or os.path.getsize(MODEL_PATH) < 1000:
+                    try:
+                        import urllib.request
+                        url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+                        urllib.request.urlretrieve(url, MODEL_PATH)
+                    except Exception as e_dl:
+                        _LANDMARKER_ERROR = f"모델 다운로드 실패: {e_dl}"
+
                 # 1. 파일 경로 기반 초기화 시도
                 try:
                     base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
@@ -42,6 +52,7 @@ def get_hand_landmarker():
                         min_hand_presence_confidence=0.08,
                     )
                     _LANDMARKER = mp_vision.HandLandmarker.create_from_options(options)
+                    _LANDMARKER_ERROR = None
                 except Exception as e1:
                     # 2. 메모리 버퍼 기반 폴백 시도
                     try:
@@ -55,8 +66,9 @@ def get_hand_landmarker():
                             min_hand_presence_confidence=0.08,
                         )
                         _LANDMARKER = mp_vision.HandLandmarker.create_from_options(options)
+                        _LANDMARKER_ERROR = None
                     except Exception as e2:
-                        print(f"MediaPipe 초기화 실패: path={e1}, buffer={e2}")
+                        _LANDMARKER_ERROR = f"MediaPipe C++ 런타임(libgomp1) 미설치 오류: {e1}"
                         _LANDMARKER = None
     return _LANDMARKER
 
@@ -394,16 +406,16 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
             "annotated_zoom_pil": annotated_zoom_pil,
             "box_1000": box_1000,
             "hand_summary_text": "\n".join(summary_lines),
+            "landmarker_error": None,
         }
 
     # Fallback: MediaPipe가 손 관절을 못 찾은 경우에도 절대 전체 프레임이나 하단 자막을 포함하지 않고,
-    # 넥 지판 영역을 타이트하게 크롭하고 손가락 관절 스켈레톤 가이드를 100% 보장하여 생성
+    # 넥 지판 영역을 타이트하게 크롭하고 운지 손 영역을 안내
     x1, y1, x2, y2 = int(w * 0.45), int(h * 0.05), int(w * 0.95), int(h * 0.65)
     clean_crop_rgb = rgb[y1:y2, x1:x2]
     clean_zoom_pil = enhance_fretboard_roi(clean_crop_rgb)
     annotated_zoom_pil = clean_zoom_pil.copy()
 
-    # 운지 손 피부색 영역 정밀 감지 및 손가락 스켈레톤(1~4, T) 가이드 강제 오버레이
     try:
         cw, ch = clean_crop_rgb.shape[1], clean_crop_rgb.shape[0]
         ycrcb_c = cv2.cvtColor(clean_crop_rgb, cv2.COLOR_RGB2YCrCb)
@@ -412,45 +424,11 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
         hand_cnts = [c for c in cnts_c if cv2.contourArea(c) > 300]
         
         draw = ImageDraw.Draw(annotated_zoom_pil)
-        colors = {1: "#FF3B30", 2: "#34C759", 3: "#007AFF", 4: "#AF52DE"}
-        
         if hand_cnts:
             c = max(hand_cnts, key=cv2.contourArea)
             bx, by, bw, bh = cv2.boundingRect(c)
-            
-            for f_num in [1, 2, 3, 4]:
-                color = colors[f_num]
-                fx = bx + int(bw * (0.72 - (f_num - 1) * 0.17))
-                col_strip = skin_c[:, max(0, fx-8):min(cw, fx+8)]
-                y_indices = np.where(col_strip > 0)[0]
-                if len(y_indices) > 0:
-                    fy_tip = int(np.min(y_indices)) + 10
-                    fy_base = int(np.max(y_indices)) - 10
-                else:
-                    fy_tip = by + int(bh * 0.20) + (f_num - 1) * 15
-                    fy_base = by + int(bh * 0.85)
-                    
-                fy_pip = int(fy_base * 0.50 + fy_tip * 0.50)
-                fy_dip = int(fy_base * 0.25 + fy_tip * 0.75)
-                
-                draw.line([(fx, fy_base), (fx - 3, fy_pip), (fx - 5, fy_dip), (fx - 7, fy_tip)], fill=color, width=3)
-                draw.ellipse([fx - 10, fy_tip - 3, fx - 4, fy_tip + 3], outline=color, width=2)
-                draw.ellipse([fx - 11, fy_pip - 8, fx + 5, fy_pip + 8], fill=color)
-                draw.text((fx - 6, fy_pip - 6), str(f_num), fill="#FFFFFF")
-                
-            tx = bx + int(bw * 0.40)
-            ty = by + 25
-            draw.ellipse([tx - 10, ty - 10, tx + 10, ty + 10], outline="#FF9500", width=3)
-            draw.text((tx - 4, ty - 6), "T", fill="#FF9500")
-        else:
-            # 피부색 컨투어가 작을 경우 지판 중심 기준 표준 운지 가이드 렌더링
-            mid_x, mid_y = cw // 2, ch // 2
-            for f_num in [1, 2, 3, 4]:
-                color = colors[f_num]
-                fx = mid_x + (2 - f_num) * 35
-                draw.line([(fx, mid_y + 45), (fx, mid_y - 25)], fill=color, width=3)
-                draw.ellipse([fx - 8, mid_y - 8, fx + 8, mid_y + 8], fill=color)
-                draw.text((fx - 3, mid_y - 6), str(f_num), fill="#FFFFFF")
+            draw.rounded_rectangle([bx, by, bx + bw, by + bh], radius=6, outline="#FF9500", width=2)
+            draw.text((bx + 6, max(4, by - 16)), "운지 손 감지 영역", fill="#FF9500")
     except Exception:
         pass
 
@@ -460,7 +438,8 @@ def analyze_and_crop_guitar_hand(pil_img: Image.Image) -> dict:
         "clean_zoom_pil": clean_zoom_pil,
         "annotated_zoom_pil": annotated_zoom_pil,
         "box_1000": box_1000,
-        "hand_summary_text": "- **운지 관절 추적 모드**: 지판 위 운지 손 손가락 마디(1~4번) 및 지판 접점 가이드가 표시됩니다.",
+        "hand_summary_text": "- **운지 시각 관찰 모드**: 지판 위 운지 손 고해상도 확대 이미지가 제공됩니다. 손가락이 누른 줄과 프렛을 직접 확인하여 판별하세요.",
+        "landmarker_error": _LANDMARKER_ERROR,
     }
 
 
